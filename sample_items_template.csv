@@ -1,0 +1,3 @@
+barcode,product description,internal sku,supplier,category,cost price,sell price,default location,quantity on hand,minimum stock,notes,serial number,asset number,job number,install location
+100000000001,Sample Widget A,SKU-001,ABC Supply,General,4.50,8.99,SHELF-A1,25,5,Fast moving item,,,,
+100000000002,Sample Widget B,SKU-002,ABC Supply,General,6.75,12.50,SHELF-A2,12,3,,,,,
