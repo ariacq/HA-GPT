@@ -221,80 +221,85 @@ class InventoryDB:
         if not cart_lines:
             raise ValueError("Cart is empty")
 
+        required_by_barcode: dict[str, int] = {}
+        for line in cart_lines:
+            barcode = str(line["barcode"]).strip()
+            quantity = int(line["quantity"])
+            item = self.get_item(barcode)
+            if item is None:
+                raise ValueError(f"Missing barcode during checkout: {barcode}")
+            required_by_barcode[barcode] = required_by_barcode.get(barcode, 0) + quantity
+            if int(item["quantity_on_hand"]) < required_by_barcode[barcode]:
+                raise ValueError(f"Not enough stock for {barcode}")
+
         subtotal = round(sum(line["line_total"] for line in cart_lines), 2)
         total = subtotal
         receipt_text = self._build_receipt(cart_lines, customer, sale_date, subtotal, total)
 
-        cur = self.conn.execute(
-            """
-            INSERT INTO sales (
-                sale_date, customer_name, phone, address, job_number, notes,
-                subtotal, total, receipt_text
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                sale_date,
-                customer.get("customer_name", ""),
-                customer.get("phone", ""),
-                customer.get("address", ""),
-                customer.get("job_number", ""),
-                customer.get("notes", ""),
-                subtotal,
-                total,
-                receipt_text,
-            ),
-        )
-        sale_id = int(cur.lastrowid)
-
-        now = datetime.utcnow().isoformat()
-        for line in cart_lines:
-            item = self.get_item(line["barcode"])
-            if item is None:
-                raise ValueError(f"Missing barcode during checkout: {line['barcode']}")
-            if int(item["quantity_on_hand"]) < int(line["quantity"]):
-                raise ValueError(f"Not enough stock for {line['barcode']}")
-
-            self.conn.execute(
+        with self.conn:
+            cur = self.conn.execute(
                 """
-                INSERT INTO sale_lines (sale_id, barcode, product_description, quantity, unit_price, line_total)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sale_id,
-                    line["barcode"],
-                    line["product_description"],
-                    line["quantity"],
-                    line["unit_price"],
-                    line["line_total"],
-                ),
-            )
-            self.conn.execute(
-                "UPDATE items SET quantity_on_hand = quantity_on_hand - ?, updated_at = ? WHERE barcode = ?",
-                (line["quantity"], now, line["barcode"]),
-            )
-            self.conn.execute(
-                """
-                INSERT INTO stock_movements (
-                    movement_type, barcode, quantity, reference, partner_name,
-                    event_date, location, notes, created_at
+                INSERT INTO sales (
+                    sale_date, customer_name, phone, address, job_number, notes,
+                    subtotal, total, receipt_text
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "sale",
-                    line["barcode"],
-                    -int(line["quantity"]),
-                    f"SALE-{sale_id}",
-                    customer.get("customer_name", ""),
                     sale_date,
-                    "",
+                    customer.get("customer_name", ""),
+                    customer.get("phone", ""),
+                    customer.get("address", ""),
+                    customer.get("job_number", ""),
                     customer.get("notes", ""),
-                    now,
+                    subtotal,
+                    total,
+                    receipt_text,
                 ),
             )
+            sale_id = int(cur.lastrowid)
 
-        self.conn.commit()
+            now = datetime.utcnow().isoformat()
+            for line in cart_lines:
+                self.conn.execute(
+                    """
+                    INSERT INTO sale_lines (sale_id, barcode, product_description, quantity, unit_price, line_total)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        sale_id,
+                        line["barcode"],
+                        line["product_description"],
+                        line["quantity"],
+                        line["unit_price"],
+                        line["line_total"],
+                    ),
+                )
+                self.conn.execute(
+                    "UPDATE items SET quantity_on_hand = quantity_on_hand - ?, updated_at = ? WHERE barcode = ?",
+                    (line["quantity"], now, line["barcode"]),
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO stock_movements (
+                        movement_type, barcode, quantity, reference, partner_name,
+                        event_date, location, notes, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "sale",
+                        line["barcode"],
+                        -int(line["quantity"]),
+                        f"SALE-{sale_id}",
+                        customer.get("customer_name", ""),
+                        sale_date,
+                        "",
+                        customer.get("notes", ""),
+                        now,
+                    ),
+                )
+
         return sale_id, receipt_text
 
     def get_transactions(
@@ -338,7 +343,7 @@ class InventoryDB:
 
             for raw in reader:
                 row = {str(k).strip().lower(): (v or "").strip() for k, v in raw.items() if k}
-                barcode = self._pick(row, ["barcode", "bar code", "code"]) 
+                barcode = self._pick(row, ["barcode", "bar code", "code"])
                 if not barcode:
                     skipped += 1
                     continue
