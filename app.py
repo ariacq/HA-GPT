@@ -45,6 +45,16 @@ def line_items_table(lines: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(lines)
 
 
+def sale_cart_line(barcode: str, product_description: str, quantity: int, unit_price: float) -> dict:
+    return {
+        "barcode": barcode,
+        "product_description": product_description,
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "line_total": round(unit_price * quantity, 2),
+    }
+
+
 def set_scan_message(level: str, message: str) -> None:
     st.session_state.scan_feedback = {"level": level, "message": message}
 
@@ -120,6 +130,7 @@ def handle_scan_input(context: str) -> None:
         found = db.get_item(barcode)
         if found is None:
             st.session_state.sale_unknown = barcode
+            st.session_state.sale_unknown_qty = qty
             set_scan_message("error", "NOT FOUND — quick-add below")
         else:
             existing_line = next((l for l in st.session_state.cart if l["barcode"] == barcode), None)
@@ -129,13 +140,12 @@ def handle_scan_input(context: str) -> None:
             else:
                 unit_price = float(found["sell_price"])
                 st.session_state.cart.append(
-                    {
-                        "barcode": barcode,
-                        "product_description": found["product_description"],
-                        "quantity": qty,
-                        "unit_price": unit_price,
-                        "line_total": round(unit_price * qty, 2),
-                    }
+                    sale_cart_line(
+                        barcode=barcode,
+                        product_description=found["product_description"],
+                        quantity=qty,
+                        unit_price=unit_price,
+                    )
                 )
             set_scan_message("success", f"Added {barcode} x{qty}")
 
@@ -164,6 +174,8 @@ def main() -> None:
         st.session_state.scan_input = ""
     if "last_barcode" not in st.session_state:
         st.session_state.last_barcode = ""
+    if "sale_unknown_qty" not in st.session_state:
+        st.session_state.sale_unknown_qty = 1
 
     tabs = st.tabs(
         [
@@ -337,18 +349,19 @@ def main() -> None:
                 if not item.product_description:
                     st.error("Product Description is required")
                 else:
+                    quick_qty = st.session_state.get("sale_unknown_qty", 1)
                     db.upsert_item(item)
                     st.session_state.cart.append(
-                        {
-                            "barcode": item.barcode,
-                            "product_description": item.product_description,
-                            "quantity": 1,
-                            "unit_price": float(item.sell_price),
-                            "line_total": round(float(item.sell_price), 2),
-                        }
+                        sale_cart_line(
+                            barcode=item.barcode,
+                            product_description=item.product_description,
+                            quantity=quick_qty,
+                            unit_price=float(item.sell_price),
+                        )
                     )
                     st.session_state.sale_unknown = ""
-                    st.success(f"Created and added {item.barcode}")
+                    st.session_state.sale_unknown_qty = 1
+                    st.success(f"Created and added {item.barcode} x{quick_qty}")
 
         cart_df = line_items_table(st.session_state.cart)
         edited = st.data_editor(
